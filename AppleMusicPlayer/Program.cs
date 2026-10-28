@@ -47,49 +47,20 @@ try
     if (isStopMusic)
     {
         Log("[ARGS] Argument isStopMusic=1 detected. Initiating termination sequence...");
-        
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            Process[] processes = Process.GetProcessesByName("AppleMusic");
-            Log($"[PROCESS] Found {processes.Length} running AppleMusic processes to terminate on Windows.");
-            foreach (Process p in processes)
-            {
-                try 
-                { 
-                    p.Kill(); 
-                    Log($"[PROCESS] Terminated process AppleMusic (PID: {p.Id}) successfully.");
-                } 
-                catch (Exception ex)
-                { 
-                    Log($"[PROCESS] Warning: Could not terminate process AppleMusic (PID: {p.Id}). Error: {ex.Message}");
-                }
-            }
-            Log("[PROCESS] Apple Music termination completed on Windows.");
-        }
-        else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-        {
-            Log("[PROCESS] Sending killall request to macOS Music application...");
-            using (Process? macKill = Process.Start(new ProcessStartInfo 
-            { 
-                FileName = "killall", 
-                Arguments = "Music", 
-                CreateNoWindow = true,
-                RedirectStandardError = true,
-                RedirectStandardOutput = true
-            }))
-            {
-                macKill?.WaitForExit();
-                string error = macKill?.StandardError.ReadToEnd() ?? "";
-                if (!string.IsNullOrWhiteSpace(error))
-                {
-                     Log($"[PROCESS] killall error output: {error.Trim()}");
-                }
-            }
-            Log("[PROCESS] Apple Music termination completed on macOS.");
-        }
-        
+        CloseAppleMusic();
         Log("[SYSTEM] Stop command handled. Exiting execution cleanly.");
         return; // Exit completely
+    }
+
+    bool isCloseBeforeRun = args.Any(a => a.Equals("isCloseBeforeRun=1", StringComparison.OrdinalIgnoreCase));
+    if (isCloseBeforeRun)
+    {
+        Log("[ARGS] Argument isCloseBeforeRun=1 detected. Closing Apple Music before launching playlist...");
+        CloseAppleMusic();
+
+        // Give the OS a moment to release the app before protocol activation relaunches it
+        Thread.Sleep(1000);
+        Log("[SYSTEM] Pre-run close handled. Continuing with playlist launch.");
     }
 
     // 1. Setup Configuration
@@ -228,44 +199,8 @@ try
     Thread.Sleep(waitTime);
     Log("[SCHEDULER] Delay concluded. Resuming automation thread execution...");
 
-    // 5 & 6. Execute OS-Specific Automation
-    if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
-    {
-        Log("[AUTOMATION] Platform target confirmed as macOS. Constructing AppleScript...");
-        const string appleScript = "tell application \"Music\" to play";
-
-        ProcessStartInfo macStartInfo = new ProcessStartInfo
-        {
-            FileName = "osascript",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true
-        };
-
-        macStartInfo.ArgumentList.Add("-e");
-        macStartInfo.ArgumentList.Add(appleScript);
-
-        Log($"[AUTOMATION] Launching AppleScript interpreter process...");
-        using (Process? macProcess = Process.Start(macStartInfo))
-        {
-            if (macProcess != null)
-            {
-                macProcess.WaitForExit();
-                string output = macProcess.StandardOutput.ReadToEnd();
-                string error = macProcess.StandardError.ReadToEnd();
-                
-                Log($"[AUTOMATION] macOS osascript process completed. Exit Code: {macProcess.ExitCode}");
-                if (!string.IsNullOrWhiteSpace(output)) Log($"[AUTOMATION] StdOut: {output.Trim()}");
-                if (!string.IsNullOrWhiteSpace(error)) Log($"[AUTOMATION] StdErr: {error.Trim()}");
-            }
-            else
-            {
-                Log("[AUTOMATION] Error: Failed to initialize osascript process instance.");
-            }
-        }
-    }
-    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    // 5 & 6. Execute Windows Automation
+    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     {
         Log("[AUTOMATION] Platform target confirmed as Windows. Inspecting running tasks...");
         
@@ -376,6 +311,51 @@ void Log(string message)
     {
         // Fallback trace in case the log file is locked by another process
         Console.Error.WriteLine($"[LOGGER FALLBACK ERROR] Failed writing to file system: {ex.Message}");
+    }
+}
+
+// Local helper to terminate Apple Music and wait until its processes have fully exited
+void CloseAppleMusic()
+{
+    if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+    {
+        Log("[PROCESS] Execution platform is not supported. Skipping Apple Music termination.");
+        return;
+    }
+
+    const string processName = "AppleMusic";
+    Process[] processes = Process.GetProcessesByName(processName);
+    Log($"[PROCESS] Found {processes.Length} running AppleMusic processes to terminate.");
+    foreach (Process p in processes)
+    {
+        try
+        {
+            p.Kill();
+            p.WaitForExit(5000);
+            Log($"[PROCESS] Terminated process AppleMusic (PID: {p.Id}) successfully.");
+        }
+        catch (Exception ex)
+        {
+            Log($"[PROCESS] Warning: Could not terminate process AppleMusic (PID: {p.Id}). Error: {ex.Message}");
+        }
+    }
+
+    // Poll until every matching process is gone (or give up after 10s)
+    const int timeoutMs = 10000;
+    Stopwatch stopwatch = Stopwatch.StartNew();
+    while (Process.GetProcessesByName(processName).Length > 0 && stopwatch.ElapsedMilliseconds < timeoutMs)
+    {
+        Thread.Sleep(250);
+    }
+
+    int remaining = Process.GetProcessesByName(processName).Length;
+    if (remaining > 0)
+    {
+        Log($"[PROCESS] Warning: {remaining} '{processName}' processes still running after {timeoutMs}ms.");
+    }
+    else
+    {
+        Log($"[PROCESS] Apple Music fully closed after {stopwatch.ElapsedMilliseconds}ms.");
     }
 }
 
