@@ -84,7 +84,7 @@ try
 
     // 3. Resolve Playlist ID based on Date and Time
     string? selectedId = null;
-    int tabsRequired = playList.IsShuffleOverPlay ? 2 : 1;
+    int tabsRequired = playList.IsShuffleOverPlay ? 1 : 2;
 
     if (playList.Schedules != null && playList.Schedules.Count > 0)
     {
